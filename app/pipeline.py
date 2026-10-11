@@ -115,6 +115,61 @@ DIARIZE_CLUSTERING_THRESHOLD = _env_or_none("DIARIZE_CLUSTERING_THRESHOLD")
 DIARIZE_MIN_DURATION_OFF = _env_or_none("DIARIZE_MIN_DURATION_OFF")
 DIARIZE_PARAM_OVERRIDES = _env_or_none("DIARIZE_PARAM_OVERRIDES")
 
+# Voice activity detection (VAD) for the whisper backend. Whisper only sees the
+# stretches the VAD marks as speech, so these settings decide whether silence
+# and background noise reach the model, where Whisper tends to invent text
+# ("Thank you.") in it. All unset by default -> WhisperX's own defaults, and
+# the model is loaded exactly as before.
+#
+#   VAD_METHOD: "pyannote" (WhisperX default) or "silero".
+#   VAD_ONSET: speech probability above which a stretch counts as speech.
+#       WhisperX default 0.5. In tests with a noise floor raised by a
+#       recorder's gain control, the invented text was removed at 0.8 but
+#       not at 0.6-0.7; at 0.8 a few percent of quiet real speech was lost.
+#   VAD_OFFSET: probability below which speech is considered to have ended.
+#       WhisperX default 0.363.
+# The chunk length is deliberately not configurable: with chunks shorter
+# than WhisperX's 30 s, far more invented text appeared in the same tests.
+# The batched WhisperX pipeline does not apply Whisper's no_speech,
+# log_prob or compression-ratio thresholds, so the VAD is the setting that
+# acts on noise. The settings are read at model load; restart to change them.
+def _env_float(name: str, low: float, high: float) -> Optional[float]:
+    """Float env var strictly between low and high; otherwise None, with a warning."""
+    value = _env_or_none(name)
+    if value is None:
+        return None
+    try:
+        number = float(value)
+    except ValueError:
+        logger.warning(f"{name}={value!r} is not a number; using the WhisperX default")
+        return None
+    if not low < number < high:
+        logger.warning(f"{name}={value!r} is outside {low}-{high}; using the WhisperX default")
+        return None
+    return number
+
+
+VAD_METHOD = (_env_or_none("VAD_METHOD") or "").lower() or None
+if VAD_METHOD not in (None, "pyannote", "silero"):
+    logger.warning(f"VAD_METHOD={VAD_METHOD!r} is not pyannote or silero; using the WhisperX default")
+    VAD_METHOD = None
+VAD_ONSET = _env_float("VAD_ONSET", 0.0, 1.0)
+VAD_OFFSET = _env_float("VAD_OFFSET", 0.0, 1.0)
+
+
+def vad_load_kwargs() -> Dict[str, Any]:
+    """Arguments for whisperx.load_model; empty when nothing is set."""
+    options = {key: value for key, value in (
+        ("vad_onset", VAD_ONSET), ("vad_offset", VAD_OFFSET),
+    ) if value is not None}
+    kwargs: Dict[str, Any] = {}
+    if VAD_METHOD:
+        kwargs["vad_method"] = VAD_METHOD
+    if options:
+        kwargs["vad_options"] = options
+    return kwargs
+
+
 # When True, words/segments that fall outside every diarization turn are assigned
 # the *nearest* speaker instead of being left unlabeled. Fixes "orphan" segments
 # (e.g. a closing line with no speaker tag) at the cost of occasionally labeling
@@ -414,12 +469,15 @@ def load_whisper_model(model_name: str, _acquire: bool = False):
             if model is None:
                 if freed:
                     clear_gpu_memory()
-                logger.info(f"Loading WhisperX model: {model_name}")
+                vad_kwargs = vad_load_kwargs()
+                logger.info(f"Loading WhisperX model: {model_name}"
+                            + (f" (VAD: {vad_kwargs})" if vad_kwargs else ""))
                 loaded = whisperx.load_model(
                     model_name,
                     device=DEVICE,
                     compute_type=COMPUTE_TYPE,
                     download_root=CACHE_DIR,
+                    **vad_kwargs,
                 )
                 logger.info(f"Model {model_name} loaded successfully")
                 # Pre-register the eviction counter time series for this model

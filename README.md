@@ -388,6 +388,27 @@ DIARIZE_FILL_NEAREST=true
 
 These are global settings applied when the pipeline loads. Invalid or unrecognised keys are logged and ignored rather than failing diarization, so the pipeline always falls back to defaults if an override cannot be applied. To find the best value for your audio without restarting the service, use the sweep script described below.
 
+#### Reducing Text Invented in Silence and Noise
+
+Text such as "Thank you." sometimes appears in quiet stretches of a transcript. It is invented by Whisper from background noise that is passed to the model as speech. Which parts of the audio are passed to Whisper is decided by voice activity detection (VAD), which can be adjusted with the settings below. They are unset by default, so WhisperX's own defaults apply unless you set them. Whisper's `no_speech_threshold`, `log_prob_threshold` and `compression_ratio_threshold` are not applied in the batched WhisperX pipeline, so they cannot be used for this.
+
+| Variable | Effect | Typical values |
+|----------|--------|----------------|
+| `VAD_METHOD` | The VAD model. | `pyannote` (default), `silero` |
+| `VAD_ONSET` | Speech probability above which a stretch is treated as speech. With a higher value, more noise is kept away from Whisper; with too high a value, quiet or distant speech is also lost. | `0.5` (default) to `0.8` |
+| `VAD_OFFSET` | Probability below which speech is treated as ended. | `0.363` (default) |
+
+```bash
+# Keep a noisy floor in quiet stretches away from Whisper
+VAD_ONSET=0.8
+# or
+VAD_METHOD=silero
+```
+
+I tested these settings on speech with 45-second gaps of silence, low room tone, hum, clicks, distant voices, and a noise floor raised by a recorder's automatic gain control. With the defaults, "Thank you." appeared only in the gaps with the raised noise floor. That text was removed with `VAD_ONSET=0.8` and with `VAD_METHOD=silero`, but not with `0.6` or `0.7`. With either setting, about a tenth of the wording elsewhere differs from the default, because the speech is divided into chunks at different points. At `0.8`, a few percent of quiet real speech was also lost, and with `silero` more of the distant voices were transcribed. In silence, low room tone, hum and clicks, no text appeared with any setting.
+
+The settings are read when the model is loaded, so the service must be restarted after a change. Invalid values are logged and ignored. They apply to the Whisper backend only.
+
 #### Sweeping Parameters on Your Own Audio
 
 `tests/diarize_sweep.py` runs diarization on one file across several settings and reports, per config, the number of speakers, turns, and a turn timeline, so you can see which value recovers your missing turns. It isolates the diarizer (no transcription), so it is fast. Run it as a one-off container so it does not disturb a running service:
@@ -549,6 +570,14 @@ MODEL_EVICTION_INTERVAL_SECONDS=60
 # DIARIZE_PARAM_OVERRIDES={"clustering": {"Fb": 1.0}}  # JSON escape hatch (Fa/Fb)
 # true = tag orphan segments with nearest speaker
 # DIARIZE_FILL_NEAREST=false
+
+# Voice activity detection (optional, unset = WhisperX defaults).
+# See "Reducing Text Invented in Silence and Noise" above.
+# default 0.5; 0.8 keeps a noisy floor away from Whisper
+# VAD_ONSET=0.8
+# default pyannote; silero is the alternative
+# VAD_METHOD=silero
+# VAD_OFFSET=0.363
 
 # Rebuild segments at speaker-change boundaries after diarization, so rapid
 # turns are not merged into one speaker's segment. Always on for the qwen3
