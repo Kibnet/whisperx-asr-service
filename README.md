@@ -1246,6 +1246,12 @@ For issues and questions:
 
 ## Changelog
 
+### v0.4.3 (2026-10-11)
+
+**Improvements**
+
+- **Optional VAD settings for text invented in silence and noise (Speakr #418):** `VAD_METHOD` (`pyannote` or `silero`), `VAD_ONSET` and `VAD_OFFSET` are passed to WhisperX when set. Text such as "Thank you." is invented by Whisper from background noise that is passed to the model as speech. In tests, it was removed with `VAD_ONSET=0.8` or `VAD_METHOD=silero`, each with the costs described in "Reducing Text Invented in Silence and Noise". Without these settings, the model is loaded as before, and the output was identical to v0.4.2 on all test files.
+
 ### v0.4.2 (2026-09-30)
 
 **Reported issues fixed**
